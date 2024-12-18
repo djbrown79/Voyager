@@ -5,6 +5,7 @@ import os
 import socket
 import struct
 import json
+from selector import select_option
 
 
 def to_varint(n):
@@ -17,6 +18,44 @@ def to_varint(n):
     return bytes(byte_array)
 
 
+def construct_handshake_packet(ip_addr, port_number):
+    """Constructs the Handshake packet for the Minecraft server."""
+    # Packet ID for Handshake (0x00)
+    packet_id = b"\x00"
+    # Protocol Version (as of 1.19, protocol version is 759)
+    protocol_version = to_varint(759)
+    # IP address
+    ip_address_bytes = ip_addr.encode("utf-8")
+    ip_address_length = to_varint(len(ip_address_bytes))
+    # Port number
+    port_bytes = struct.pack("!H", port_number)
+    # Next state (0x01 for status)
+    next_state = b"\x01"
+
+    # Combine all parts into a Handshake packet
+    handshake_packet = (
+        packet_id +
+        protocol_version +
+        ip_address_length +
+        ip_address_bytes +
+        port_bytes +
+        next_state
+    )
+
+    # Prepend the length of the packet as a VarInt
+    handshake_length = to_varint(len(handshake_packet))
+    full_handshake_packet = handshake_length + handshake_packet
+
+    return full_handshake_packet
+
+def send_handshake_and_status(sock, handshake_packet):
+    """Sends the Handshake packet and Status Request packet to the server."""
+    sock.sendall(handshake_packet)
+    # Send the Status Request packet (1 byte, 0x00)
+    status_request_packet = b"\x01\x00"  # Length of 1 (VarInt) + 0x00 (Packet ID)
+    sock.sendall(status_request_packet)
+
+
 def verify_minecraft_server(ip_addr, port_number):
     sock = None
     try:
@@ -24,38 +63,9 @@ def verify_minecraft_server(ip_addr, port_number):
         sock = socket.create_connection((ip_addr, port_number), timeout=5)
 
         # Construct the Handshake packet
-        # 1. Packet ID (1 byte, for Handshake this is 0x00)
-        packet_id = b"\x00"
-        # 2. Protocol Version (as of 1.19, the protocol version is 759; adjust if necessary)
-        protocol_version = to_varint(759)
-        # 3. Length of IP address followed by actual IP address
-        ip_address_bytes = ip_addr.encode("utf-8")
-        ip_address_length = to_varint(len(ip_address_bytes))
-        # 4. Port number (2 bytes in big-endian format)
-        port_bytes = struct.pack("!H", port_number)
-        # 5. Next state (1 byte, 0x01 for status)
-        next_state = b"\x01"
-
-        # Combine all parts into a Handshake packet
-        handshake_packet = (
-                packet_id
-                + protocol_version
-                + ip_address_length
-                + ip_address_bytes
-                + port_bytes
-                + next_state
-        )
-
-        # Prepend the length of the packet as a VarInt
-        handshake_length = to_varint(len(handshake_packet))
-        full_handshake_packet = handshake_length + handshake_packet
-
-        # Send the Handshake packet
-        sock.sendall(full_handshake_packet)
-
-        # Send the Status Request packet (1 byte, 0x00)
-        status_request_packet = b"\x01\x00"  # Length of 1 (VarInt) + 0x00 (Packet ID)
-        sock.sendall(status_request_packet)
+        full_handshake_packet = construct_handshake_packet(ip_addr, port_number)
+        # Send the Handshake packet and Status Request
+        send_handshake_and_status(sock, full_handshake_packet)
 
         # Read the response
         # Read the length of the packet (VarInt)
@@ -126,6 +136,14 @@ def find_minecraft_java_port():
                 continue
     return None
 
+def create_new_checkpoint(skill_library_path, default_prompt=""):
+    """Creates a new checkpoint directory and returns its sanitized name."""
+    prompt = "Enter a name for the new checkpoint" + (f" ({default_prompt}): " if default_prompt else ": ")
+    checkpoint_name = input(prompt).strip() or default_prompt
+    sanitized_name = "".join(c for c in checkpoint_name if c.isalnum() or c in ('-', '_')).rstrip()
+    new_checkpoint_path = os.path.join(skill_library_path, sanitized_name)
+    os.makedirs(new_checkpoint_path)
+    return sanitized_name
 
 if __name__ == "__main__":
 
@@ -165,9 +183,30 @@ if __name__ == "__main__":
         print()
         exit()
 
-    # Ask the user if they want to start over or continue from their previous session
-    resume = input("Do you want to continue from your previous session? (yes/no): ").strip().lower().startswith('y')
 
+    skill_library_path = "ckpts"
+    selected_checkpoint = None
+    resume = False
+
+    if not os.path.exists(skill_library_path):
+        os.makedirs(skill_library_path)
+        selected_checkpoint = create_new_checkpoint(skill_library_path, "default")
+        resume = True
+    else:
+        try:
+            checkpoints = [
+                name for name in os.listdir(skill_library_path)
+                if os.path.isdir(os.path.join(skill_library_path, name))
+            ]
+            checkpoints.append("New...")
+            selected_checkpoint = select_option(checkpoints)
+            
+            if selected_checkpoint == "New...":
+                selected_checkpoint = create_new_checkpoint(skill_library_path)
+                resume = False
+        except FileNotFoundError:
+            checkpoints = []
+    
     # Initialize the Voyager instance with the Minecraft port and OpenAI API key
     voyager = Voyager(
         mc_port=mc_port,
@@ -177,7 +216,8 @@ if __name__ == "__main__":
         curriculum_agent_qa_model_name=openai_model,
         critic_agent_model_name=openai_model,
         skill_manager_model_name=openai_model,
-        resume=resume
+        resume=resume,
+        ckpt_dir = "ckpts\\" + selected_checkpoint
     )
 
     # Start lifelong learning
