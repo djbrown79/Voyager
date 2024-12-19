@@ -55,7 +55,7 @@ Minecraft version 1.19.4. Install the following content:
 
 - CompleteConfig 2.3.1
 - Fabric API 0.87.2+1.19.4
-- Mode Menu 6.3.1
+- Mod Menu 6.3.1
 - Multiplayer Server Pause 1.3.0
 - iChunUtil 1.0.0
 
